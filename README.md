@@ -1,0 +1,2 @@
+# order_book_imbalance
+This project explores an implementation of the order book imbalance high-frequency trading strategy. The strategy is coded in Rust, and tested against free publicly available real-time level 2 (L2) data using the Binance WebSocket API. 
