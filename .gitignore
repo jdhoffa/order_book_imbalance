@@ -1,1 +1,6 @@
-/target
+# Order book snapshot files
+orderbook_snapshot_*.parquet
+
+# Rust
+/target/
+**/*.rs.bk
