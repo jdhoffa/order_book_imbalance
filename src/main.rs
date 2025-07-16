@@ -1,6 +1,17 @@
 use futures_util::StreamExt;
+use reqwest;
 use serde::Deserialize;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+
+#[derive(Debug, Deserialize)]
+struct OrderBookSnapshot {
+    #[serde(rename = "lastUpdateId")]
+    last_update_id: u64,
+    #[serde(rename = "bids")]
+    _bids: Vec<[String; 2]>,
+    #[serde(rename = "asks")]
+    _asks: Vec<[String; 2]>,
+}
 
 #[derive(Debug, Deserialize)]
 struct OrderBookUpdate {
@@ -20,8 +31,32 @@ struct OrderBookUpdate {
     asks: Vec<[String; 2]>,
 }
 
+async fn fetch_order_book_snapshot(
+    symbol: &str,
+) -> Result<OrderBookSnapshot, Box<dyn std::error::Error>> {
+    let url = format!(
+        "https://api.binance.com/api/v3/depth?symbol={}&limit=1000",
+        symbol.to_uppercase()
+    );
+
+    let response = reqwest::get(&url).await?;
+    let snapshot: OrderBookSnapshot = response.json().await?;
+
+    Ok(snapshot)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Fetch the initial order book snapshot
+    let symbol = "btcusdt";
+
+    // Initialize the snapshot
+    let snapshot = fetch_order_book_snapshot(symbol).await?;
+    println!(
+        "Received snapshot with last update ID: {}",
+        snapshot.last_update_id
+    );
+
     // Connect to the Binance WebSocket stream
     let url = "wss://stream.binance.com:9443/ws/btcusdt@depth";
     let (ws_stream, _) = connect_async(url).await?;
