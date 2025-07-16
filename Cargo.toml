@@ -2,6 +2,7 @@
 name = "order_book_imbalance"
 version = "0.1.0"
 edition = "2024"
+default-run = "order_book_imbalance"
 
 [[bin]]
 name = "order_book_imbalance"
