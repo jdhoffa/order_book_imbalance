@@ -1,8 +1,8 @@
 use ordered_float::OrderedFloat;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OrderBookSnapshot {
     #[serde(rename = "lastUpdateId")]
     pub last_update_id: u64,
@@ -10,7 +10,7 @@ pub struct OrderBookSnapshot {
     pub asks: Vec<[String; 2]>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OrderBookUpdate {
     #[serde(rename = "e")]
     pub _event_type: String,
@@ -91,4 +91,11 @@ impl OrderBook {
         // Update last update ID
         self.last_update_id = update.final_update_id;
     }
+}
+
+#[derive(Serialize)]
+pub struct Trade {
+    pub side: String,
+    pub update_id: u64,
+    pub imbalance: f64,
 }

@@ -4,11 +4,11 @@
 This project implements an order book imbalance high-frequency trading strategy in Rust. It leverages real-time level 2 (L2) market data from the Binance WebSocket API.
 
 ## Features
-- Initial order book snapshot fetching via REST API (stored as a local Parquet file)
-- Real-time order book updates, streamed via WebSocket
+- Initial order book snapshot fetching via REST API (snapshot saved as JSON)
+- Real-time order book updates, streamed via WebSocket (stream saved as JSONL on exit)
 - Order book imbalance calculation based on real-time data
-- Buy/sell signal generation based on imbalance thresholds
-- (Util) CLI for reading and analyzing stored parquet snapshots
+- Buy/sell signal generation based on imbalance thresholds (trade decisions saved as JSON)
+- Simulation of trading strategy with a 1000000 USDT starting portfolio balance
 
 ## Installation
 1. Clone the repository
@@ -23,53 +23,43 @@ cargo build --release
 Run the main application to trigger the order book imbalance strategy (on "BTC/USDT" by default):
 ```bash
 cargo run
+
+# specify log level (default: info)
+RUST_LOG=debug cargo run
 ```
 
 The application will:
 1. Fetch an initial order book snapshot via REST API
 2. Store the snapshot locally in Parquet format
-   - File will be named `orderbook_snapshot_btcusdt_{YYYYMMDD}_{HHMMSS}.parquet`
-   - Example: `orderbook_snapshot_btcusdt_20250716_123456.parquet`
+   - File will be named `orderbook_snapshot_btcusdt_{YYYYMMDD}_{HHMMSS}.json`
+   - Example: `orderbook_snapshot_btcusdt_20250716_123456.json`
 3. Connect to Binance's WebSocket stream, for the given symbol (default: BTC/USDT)
 4. Calculate order book imbalance in real-time on 10-second intervals:
     - "top_bids_qty / (top_bids_qty + top_asks_qty)"
 5. Generate buy/sell signals based on imbalance thresholds:
     - Buy signal if imbalance > 0.7
     - Sell signal if imbalance < 0.3
-6. Exit the stream by pressing `Ctrl+C`
-
-### (Util) Reading Stored Parquet Snapshots
-Use the snapshot reader to view stored order book data:
-```bash
-cargo run --bin read_snapshot -- -f <filename>.parquet
-```
-
-Options:
-- `-f, --file`: Path to the Parquet file (required)
-- `-r, --rows`: Number of rows to display (default: 10, use 0 for all rows)
-
-Example:
-```bash
-cargo run --bin read_snapshot -- -f orderbook_snapshot_btcusdt_{YYYYMMDD}_{HHMMSS}.parquet -r 5
-```
+6. Simulate trading strategy with a 1000000 USDT starting portfolio balance
+7. Exit the stream by pressing `Ctrl+C`
 
 ## Example Output
 
 When running the strategy, you might see output like:
 
 ```
-Received snapshot with last update ID: 72984315819
-Saved snapshot to orderbook_snapshot_btcusdt_20250717_151018.parquet
-WebSocket connection established
-OrderBook updated (Last Update ID: 72984316237)
-Current Imbalance (top 10): 0.7071
-📈 BUY SIGNAL (Imbalance: 0.7071)
-OrderBook updated (Last Update ID: 72984316606)
-Current Imbalance (top 10): 0.7532
-📈 BUY SIGNAL (Imbalance: 0.7532)
-OrderBook updated (Last Update ID: 72984316956)
-Current Imbalance (top 10): 0.7467
-📈 BUY SIGNAL (Imbalance: 0.7467)
+[2025-07-17T16:38:50Z INFO  order_book_imbalance] Initial portfolio: $1000000.00 USDT, 0.00000000 BTC
+[2025-07-17T16:38:50Z INFO  order_book_imbalance] Received snapshot with last update ID: 72995677008
+[2025-07-17T16:38:50Z INFO  order_book_imbalance] Saved snapshot to orderbook_snapshot_btcusdt_20250717_183850.json
+[2025-07-17T16:38:52Z INFO  order_book_imbalance] WebSocket connection established
+[2025-07-17T16:38:52Z INFO  order_book_imbalance] OrderBook updated (Last Update ID: 72995677651)
+[2025-07-17T16:38:52Z INFO  order_book_imbalance] Current Imbalance (top 10): 0.1968
+
+...
+
+[2025-07-17T17:08:35Z INFO  order_book_imbalance] Current Imbalance (top 10): 0.8519
+^C[2025-07-17T17:08:35Z INFO  order_book_imbalance] Received CTRL+C, shutting down gracefully...
+[2025-07-17T17:08:35Z INFO  order_book_imbalance] Saved trades to trades.json
+[2025-07-17T17:08:35Z INFO  order_book_imbalance] Final portfolio value: $1020314.66 (USDT: $0.00, BTC: 8.58543368 @ 118842.53 USDT)
 ```
 
 ## Data Format
@@ -95,9 +85,9 @@ Each real-time order book update includes:
 ## File Naming Convention
 Snapshot files are saved with the format:
 ```
-orderbook_snapshot_<symbol>_<timestamp>.parquet
+orderbook_snapshot_<symbol>_<timestamp>.json
 ```
-Example: `orderbook_snapshot_btcusdt_20250716_123456.parquet`
+Example: `orderbook_snapshot_btcusdt_20250716_123456.json`
 
 ## License
 
