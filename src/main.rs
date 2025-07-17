@@ -1,14 +1,12 @@
 mod models;
 
-use arrow::array::{Float64Array, StringArray, UInt64Array};
-use arrow::record_batch::RecordBatch;
 use futures_util::StreamExt;
-use models::{OrderBook, OrderBookSnapshot, OrderBookUpdate};
-use parquet::arrow::arrow_writer::ArrowWriter;
-use parquet::file::properties::WriterProperties;
+use models::{OrderBook, OrderBookSnapshot, OrderBookUpdate, Trade};
 use reqwest;
-use std::fs::File;
-use std::sync::Arc;
+use serde_json;
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
+use tokio::{select, signal};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 
 async fn fetch_order_book_snapshot(
@@ -25,83 +23,32 @@ async fn fetch_order_book_snapshot(
     Ok(snapshot)
 }
 
-async fn save_snapshot_to_parquet(
+async fn save_snapshot_to_json(
     snapshot: &OrderBookSnapshot,
     symbol: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // Create arrays for our columns
-    let mut bid_prices = Vec::new();
-    let mut bid_quantities = Vec::new();
-    let mut ask_prices = Vec::new();
-    let mut ask_quantities = Vec::new();
-    let mut update_ids = Vec::new();
-    let mut symbols = Vec::new();
-
-    // Convert bids
-    for bid in &snapshot.bids {
-        bid_prices.push(bid[0].parse::<f64>()?);
-        bid_quantities.push(bid[1].parse::<f64>()?);
-        update_ids.push(snapshot.last_update_id);
-        symbols.push(symbol);
-    }
-
-    // Convert asks
-    for ask in &snapshot.asks {
-        ask_prices.push(ask[0].parse::<f64>()?);
-        ask_quantities.push(ask[1].parse::<f64>()?);
-    }
-
-    // Create Arrow arrays
-    let bid_prices = Float64Array::from(bid_prices);
-    let bid_quantities = Float64Array::from(bid_quantities);
-    let ask_prices = Float64Array::from(ask_prices);
-    let ask_quantities = Float64Array::from(ask_quantities);
-    let update_ids = UInt64Array::from(update_ids);
-    let symbols = StringArray::from(symbols);
-
-    // Create schema
-    let schema = Arc::new(arrow::datatypes::Schema::new(vec![
-        arrow::datatypes::Field::new("symbol", arrow::datatypes::DataType::Utf8, false),
-        arrow::datatypes::Field::new("update_id", arrow::datatypes::DataType::UInt64, false),
-        arrow::datatypes::Field::new("bid_price", arrow::datatypes::DataType::Float64, false),
-        arrow::datatypes::Field::new("bid_quantity", arrow::datatypes::DataType::Float64, false),
-        arrow::datatypes::Field::new("ask_price", arrow::datatypes::DataType::Float64, false),
-        arrow::datatypes::Field::new("ask_quantity", arrow::datatypes::DataType::Float64, false),
-    ]));
-
-    // Create RecordBatch
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(symbols),
-            Arc::new(update_ids),
-            Arc::new(bid_prices),
-            Arc::new(bid_quantities),
-            Arc::new(ask_prices),
-            Arc::new(ask_quantities),
-        ],
-    )?;
-
-    // Create filename with timestamp
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("orderbook_snapshot_{}_{}.parquet", symbol, timestamp);
+    let filename = format!("orderbook_snapshot_{}_{}.json", symbol, timestamp);
 
-    // Create Parquet file
     let file = File::create(&filename)?;
-    let props = WriterProperties::builder().build();
-    let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
-
-    // Write batch
-    writer.write(&batch)?;
-    writer.close()?;
-
+    serde_json::to_writer_pretty(file, snapshot)?;
     Ok(filename)
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Portfolio state
+    let mut usdt_balance: f64 = 1000000.0;
+    let mut btc_balance: f64 = 0.0;
+    println!(
+        "Initial portfolio: ${:.2} USDT, {:.8} BTC",
+        usdt_balance, btc_balance
+    );
+
     // Fetch the initial order book snapshot
     let symbol = "btcusdt";
+
+    let mut shutdown_signal = Box::pin(signal::ctrl_c());
 
     // Initialize the snapshot
     let snapshot = fetch_order_book_snapshot(symbol).await?;
@@ -110,14 +57,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         snapshot.last_update_id
     );
 
-    // Save snapshot to Parquet file
-    match save_snapshot_to_parquet(&snapshot, symbol).await {
+    // Save snapshot to JSON file
+    match save_snapshot_to_json(&snapshot, symbol).await {
         Ok(filename) => println!("Saved snapshot to {}", filename),
         Err(e) => eprintln!("Failed to save snapshot: {}", e),
     }
 
     // Initialize live OrderBook from snapshot
     let mut order_book = OrderBook::from(snapshot);
+    let mut trades = Vec::new();
+
+    // Open file to save diffs
+    let diffs_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("orderbook_diffs.jsonl")?;
+    let mut diffs_writer = BufWriter::new(diffs_file);
 
     // Connect to the Binance WebSocket stream
     let url = "wss://stream.binance.com:9443/ws/btcusdt@depth";
@@ -126,58 +81,117 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (_, mut read) = ws_stream.split();
 
-    // Handle incoming messages
-    while let Some(message) = read.next().await {
-        match message {
-            Ok(Message::Text(text)) => match serde_json::from_str::<OrderBookUpdate>(&text) {
-                Ok(update) => {
-                    // Check sequence/order (optional but recommended)
-                    if update.final_update_id > order_book.last_update_id {
-                        order_book.apply_update(&update);
-                        println!(
-                            "OrderBook updated (Last Update ID: {})",
-                            order_book.last_update_id
-                        );
+    loop {
+        select! {
+            maybe_message = read.next() => {
+                match maybe_message {
+                    Some(Ok(Message::Text(text))) => match serde_json::from_str::<OrderBookUpdate>(&text) {
+                        Ok(update) => {
+                            if update.final_update_id > order_book.last_update_id {
+                                let json = serde_json::to_string(&update)?;
+                                writeln!(diffs_writer, "{}", json)?;
+                                diffs_writer.flush()?;
 
-                        // Example calculation: top 10 imbalance
-                        let top_bids_qty: f64 = order_book
-                            .bids
-                            .iter()
-                            .rev()
-                            .take(10)
-                            .map(|(_, qty)| qty)
-                            .sum();
+                                order_book.apply_update(&update);
+                                println!(
+                                    "OrderBook updated (Last Update ID: {})",
+                                    order_book.last_update_id
+                                );
 
-                        let top_asks_qty: f64 =
-                            order_book.asks.iter().take(10).map(|(_, qty)| qty).sum();
+                                let top_bids_qty: f64 = order_book
+                                    .bids
+                                    .iter()
+                                    .rev()
+                                    .take(10)
+                                    .map(|(_, qty)| qty)
+                                    .sum();
 
-                        let imbalance =
-                            top_bids_qty / (top_bids_qty + top_asks_qty).max(f64::EPSILON);
-                        println!("Current Imbalance (top 10): {:.4}", imbalance);
+                                let top_asks_qty: f64 =
+                                    order_book.asks.iter().take(10).map(|(_, qty)| qty).sum();
 
-                        if imbalance > 0.7 {
-                            println!("📈 BUY SIGNAL (Imbalance: {:.4})", imbalance);
+                                let imbalance =
+                                    top_bids_qty / (top_bids_qty + top_asks_qty).max(f64::EPSILON);
+                                println!("Current Imbalance (top 10): {:.4}", imbalance);
+
+                                let mut trade_executed = false;
+                                let mut trade_side = "";
+
+                                if imbalance > 0.7 && usdt_balance > 0.0 {
+                                    // BUY
+                                    if let Some((best_ask, _)) = order_book.asks.iter().next() {
+                                        let qty = usdt_balance / **best_ask;
+                                        btc_balance += qty;
+                                        println!("📈 BUY {:.8} BTC at {:.2} USDT", qty, best_ask);
+                                        usdt_balance = 0.0;
+                                        trade_executed = true;
+                                        trade_side = "buy";
+                                    }
+                                }
+                                if imbalance < 0.3 && btc_balance > 0.0 {
+                                    // SELL
+                                    if let Some((best_bid, _)) = order_book.bids.iter().next_back() {
+                                        let proceeds = btc_balance * **best_bid;
+                                        println!("📉 SELL {:.8} BTC at {:.2} USDT", btc_balance, best_bid);
+                                        usdt_balance += proceeds;
+                                        btc_balance = 0.0;
+                                        trade_executed = true;
+                                        trade_side = "sell";
+                                    }
+                                }
+                                if trade_executed {
+                                    trades.push(Trade {
+                                        side: trade_side.into(),
+                                        update_id: update.final_update_id,
+                                        imbalance,
+                                    });
+                                    println!(
+                                        "Portfolio: ${:.2} USDT, {:.8} BTC",
+                                        usdt_balance, btc_balance
+                                    );
+                                }
+                            }
                         }
-                        if imbalance < 0.3 {
-                            println!("📉 SELL SIGNAL (Imbalance: {:.4})", imbalance);
-                        }
+                        Err(e) => eprintln!("Failed to parse update: {}", e),
+                    },
+                    Some(Ok(Message::Binary(bin))) => println!("Received binary message: {:?}", bin),
+                    Some(Ok(Message::Ping(_))) => println!("Received ping"),
+                    Some(Ok(Message::Pong(_))) => println!("Received pong"),
+                    Some(Ok(Message::Close(_))) => {
+                        println!("WebSocket closed");
+                        break;
                     }
+                    Some(Ok(Message::Frame(_))) => println!("Received raw frame"),
+                    Some(Err(e)) => {
+                        println!("Error receiving message: {}", e);
+                        break;
+                    }
+                    None => break,
                 }
-                Err(e) => eprintln!("Failed to parse update: {}", e),
-            },
-            Ok(Message::Binary(bin)) => println!("Received binary message: {:?}", bin),
-            Ok(Message::Ping(_)) => println!("Received ping"),
-            Ok(Message::Pong(_)) => println!("Received pong"),
-            Ok(Message::Close(_)) => {
-                println!("WebSocket closed");
-                break;
             }
-            Ok(Message::Frame(_)) => println!("Received raw frame"),
-            Err(e) => {
-                println!("Error receiving message: {}", e);
+            _ = &mut shutdown_signal => {
+                println!("Received CTRL+C, shutting down gracefully...");
                 break;
             }
         }
     }
+
+    // Save trades to disk as JSON
+    let trades_file = File::create("trades.json")?;
+    serde_json::to_writer_pretty(trades_file, &trades)?;
+    println!("Saved trades to trades.json");
+
+    // Calculate and print final portfolio value
+    let final_btc_price = order_book
+        .bids
+        .into_iter()
+        .last()
+        .map(|(p, _)| *p)
+        .unwrap_or(0.0);
+    let total_value = usdt_balance + btc_balance * final_btc_price;
+    println!(
+        "Final portfolio value: ${:.2} (USDT: ${:.2}, BTC: {:.8} @ {:.2} USDT)",
+        total_value, usdt_balance, btc_balance, final_btc_price
+    );
+
     Ok(())
 }
