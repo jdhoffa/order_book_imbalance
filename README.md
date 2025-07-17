@@ -53,6 +53,25 @@ Example:
 cargo run --bin read_snapshot -- -f orderbook_snapshot_btcusdt_{YYYYMMDD}_{HHMMSS}.parquet -r 5
 ```
 
+## Example Output
+
+When running the strategy, you might see output like:
+
+```
+Received snapshot with last update ID: 72984315819
+Saved snapshot to orderbook_snapshot_btcusdt_20250717_151018.parquet
+WebSocket connection established
+OrderBook updated (Last Update ID: 72984316237)
+Current Imbalance (top 10): 0.7071
+📈 BUY SIGNAL (Imbalance: 0.7071)
+OrderBook updated (Last Update ID: 72984316606)
+Current Imbalance (top 10): 0.7532
+📈 BUY SIGNAL (Imbalance: 0.7532)
+OrderBook updated (Last Update ID: 72984316956)
+Current Imbalance (top 10): 0.7467
+📈 BUY SIGNAL (Imbalance: 0.7467)
+```
+
 ## Data Format
 
 ### Order Book Snapshot
