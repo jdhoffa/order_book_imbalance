@@ -3,7 +3,7 @@ mod models;
 use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use futures_util::StreamExt;
-use models::{OrderBookSnapshot, OrderBookUpdate};
+use models::{OrderBook, OrderBookSnapshot, OrderBookUpdate};
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use reqwest;
@@ -116,6 +116,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(e) => eprintln!("Failed to save snapshot: {}", e),
     }
 
+    // Initialize live OrderBook from snapshot
+    let mut order_book = OrderBook::from(snapshot);
+
     // Connect to the Binance WebSocket stream
     let url = "wss://stream.binance.com:9443/ws/btcusdt@depth";
     let (ws_stream, _) = connect_async(url).await?;
@@ -128,27 +131,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match message {
             Ok(Message::Text(text)) => match serde_json::from_str::<OrderBookUpdate>(&text) {
                 Ok(update) => {
-                    println!("Received order book update:");
-                    println!("Event type: {}", update.event_type);
-                    println!("Event time: {}", update.event_time);
-                    println!("Symbol: {}", update.symbol);
-                    println!(
-                        "Update IDs: {} to {}",
-                        update.first_update_id, update.final_update_id
-                    );
-                    println!("Bids:");
-                    for bid in update.bids {
-                        println!("  Price: {}, Quantity: {}", bid[0], bid[1]);
-                    }
-                    println!("Asks:");
-                    for ask in update.asks {
-                        println!("  Price: {}, Quantity: {}", ask[0], ask[1]);
+                    // Check sequence/order (optional but recommended)
+                    if update.final_update_id > order_book.last_update_id {
+                        order_book.apply_update(&update);
+                        println!(
+                            "OrderBook updated (Last Update ID: {})",
+                            order_book.last_update_id
+                        );
+
+                        // Example calculation: top 10 imbalance
+                        let top_bids_qty: f64 = order_book
+                            .bids
+                            .iter()
+                            .rev()
+                            .take(10)
+                            .map(|(_, qty)| qty)
+                            .sum();
+
+                        let top_asks_qty: f64 =
+                            order_book.asks.iter().take(10).map(|(_, qty)| qty).sum();
+
+                        let imbalance =
+                            top_bids_qty / (top_bids_qty + top_asks_qty).max(f64::EPSILON);
+                        println!("Current Imbalance (top 10): {:.4}", imbalance);
+
+                        if imbalance > 0.7 {
+                            println!("📈 BUY SIGNAL (Imbalance: {:.4})", imbalance);
+                        }
+                        if imbalance < 0.3 {
+                            println!("📉 SELL SIGNAL (Imbalance: {:.4})", imbalance);
+                        }
                     }
                 }
-                Err(e) => {
-                    eprintln!("Failed to parse message: {}", e);
-                    eprintln!("Raw message: {}", text);
-                }
+                Err(e) => eprintln!("Failed to parse update: {}", e),
             },
             Ok(Message::Binary(bin)) => println!("Received binary message: {:?}", bin),
             Ok(Message::Ping(_)) => println!("Received ping"),

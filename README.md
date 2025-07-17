@@ -1,11 +1,12 @@
 # order_book_imbalance
-This project explores an implementation of the order book imbalance high-frequency trading strategy. The strategy is coded in Rust, and tested against free publicly available real-time level 2 (L2) data using the Binance WebSocket API. 
+This project implements an order book imbalance high-frequency trading strategy in Rust. It leverages real-time level 2 (L2) market data from the Binance WebSocket API.
 
 ## Features
-- Initial order book snapshot fetching via REST API
-- Parquet file storage of order book snapshots
-- Real-time order book data streaming via WebSocket
-- CLI for reading and analyzing stored parquet snapshots
+- Initial order book snapshot fetching via REST API (stored as a local Parquet file)
+- Real-time order book updates, streamed via WebSocket
+- Order book imbalance calculation based on real-time data
+- Buy/sell signal generation based on imbalance thresholds
+- (Util) CLI for reading and analyzing stored parquet snapshots
 
 ## Installation
 1. Clone the repository
@@ -17,18 +18,25 @@ cargo build --release
 ## Usage
 
 ### Fetching Order Book Data
-Run the main application to fetch and store order book data:
+Run the main application to trigger the order book imbalance strategy (on "BTC/USDT" by default):
 ```bash
-cargo run --bin order_book_imbalance
+cargo run
 ```
 
 The application will:
-1. Fetch an initial order book snapshot via REST API (will automatically be saved as a timestamped parquet file)
-3. Connect to Binance's WebSocket stream
-4. Display order book updates in real-time
-5. Exit the stream by pressing `Ctrl+C`
+1. Fetch an initial order book snapshot via REST API
+2. Store the snapshot locally in Parquet format
+   - File will be named `orderbook_snapshot_btcusdt_{YYYYMMDD}_{HHMMSS}.parquet`
+   - Example: `orderbook_snapshot_btcusdt_20250716_123456.parquet`
+3. Connect to Binance's WebSocket stream, for the given symbol (default: BTC/USDT)
+4. Calculate order book imbalance in real-time on 10-second intervals:
+    - "top_bids_qty / (top_bids_qty + top_asks_qty)"
+5. Generate buy/sell signals based on imbalance thresholds:
+    - Buy signal if imbalance > 0.7
+    - Sell signal if imbalance < 0.3
+6. Exit the stream by pressing `Ctrl+C`
 
-### Reading Stored Snapshots
+### (Util) Reading Stored Parquet Snapshots
 Use the snapshot reader to view stored order book data:
 ```bash
 cargo run --bin read_snapshot -- -f <filename>.parquet
@@ -45,6 +53,15 @@ cargo run --bin read_snapshot -- -f orderbook_snapshot_btcusdt_{YYYYMMDD}_{HHMMS
 
 ## Data Format
 
+### Order Book Snapshot
+Snapshots are stored in Parquet format with the following schema:
+- symbol: String
+- update_id: UInt64
+- bid_price: Float64
+- bid_quantity: Float64
+- ask_price: Float64
+- ask_quantity: Float64
+
 ### Order Book Updates
 Each real-time order book update includes:
 - Event type
@@ -53,15 +70,6 @@ Each real-time order book update includes:
 - Update IDs (for order book maintenance)
 - Bids (price and quantity)
 - Asks (price and quantity)
-
-### Stored Snapshots
-Snapshots are stored in Parquet format with the following schema:
-- symbol: String
-- update_id: UInt64
-- bid_price: Float64
-- bid_quantity: Float64
-- ask_price: Float64
-- ask_quantity: Float64
 
 ## File Naming Convention
 Snapshot files are saved with the format:
