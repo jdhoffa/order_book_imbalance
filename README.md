@@ -1,4 +1,6 @@
 # order_book_imbalance
+[![Rust](https://github.com/jdhoffa/order_book_imbalance/actions/workflows/ci.yml/badge.svg)](https://github.com/jdhoffa/order_book_imbalance/actions/workflows/ci.yml)
+
 This project implements an order book imbalance high-frequency trading strategy in Rust. It leverages real-time level 2 (L2) market data from the Binance WebSocket API.
 
 ## Features
