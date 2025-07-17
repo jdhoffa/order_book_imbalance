@@ -37,12 +37,15 @@ async fn save_snapshot_to_json(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init(); // Initialize the logger
+
     // Portfolio state
     let mut usdt_balance: f64 = 1000000.0;
     let mut btc_balance: f64 = 0.0;
-    println!(
+    log::info!(
         "Initial portfolio: ${:.2} USDT, {:.8} BTC",
-        usdt_balance, btc_balance
+        usdt_balance,
+        btc_balance
     );
 
     // Fetch the initial order book snapshot
@@ -52,15 +55,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize the snapshot
     let snapshot = fetch_order_book_snapshot(symbol).await?;
-    println!(
+    log::info!(
         "Received snapshot with last update ID: {}",
         snapshot.last_update_id
     );
 
     // Save snapshot to JSON file
     match save_snapshot_to_json(&snapshot, symbol).await {
-        Ok(filename) => println!("Saved snapshot to {}", filename),
-        Err(e) => eprintln!("Failed to save snapshot: {}", e),
+        Ok(filename) => log::info!("Saved snapshot to {}", filename),
+        Err(e) => log::error!("Failed to save snapshot: {}", e),
     }
 
     // Initialize live OrderBook from snapshot
@@ -77,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to the Binance WebSocket stream
     let url = "wss://stream.binance.com:9443/ws/btcusdt@depth";
     let (ws_stream, _) = connect_async(url).await?;
-    println!("WebSocket connection established");
+    log::info!("WebSocket connection established");
 
     let (_, mut read) = ws_stream.split();
 
@@ -93,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 diffs_writer.flush()?;
 
                                 order_book.apply_update(&update);
-                                println!(
+                                log::info!(
                                     "OrderBook updated (Last Update ID: {})",
                                     order_book.last_update_id
                                 );
@@ -111,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                                 let imbalance =
                                     top_bids_qty / (top_bids_qty + top_asks_qty).max(f64::EPSILON);
-                                println!("Current Imbalance (top 10): {:.4}", imbalance);
+                                log::info!("Current Imbalance (top 10): {:.4}", imbalance);
 
                                 let mut trade_executed = false;
                                 let mut trade_side = "";
@@ -121,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     if let Some((best_ask, _)) = order_book.asks.iter().next() {
                                         let qty = usdt_balance / **best_ask;
                                         btc_balance += qty;
-                                        println!("📈 BUY {:.8} BTC at {:.2} USDT", qty, best_ask);
+                                        log::info!("📈 BUY {:.8} BTC at {:.2} USDT", qty, best_ask);
                                         usdt_balance = 0.0;
                                         trade_executed = true;
                                         trade_side = "buy";
@@ -131,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // SELL
                                     if let Some((best_bid, _)) = order_book.bids.iter().next_back() {
                                         let proceeds = btc_balance * **best_bid;
-                                        println!("📉 SELL {:.8} BTC at {:.2} USDT", btc_balance, best_bid);
+                                        log::info!("📉 SELL {:.8} BTC at {:.2} USDT", btc_balance, best_bid);
                                         usdt_balance += proceeds;
                                         btc_balance = 0.0;
                                         trade_executed = true;
@@ -144,32 +147,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         update_id: update.final_update_id,
                                         imbalance,
                                     });
-                                    println!(
+                                    log::info!(
                                         "Portfolio: ${:.2} USDT, {:.8} BTC",
                                         usdt_balance, btc_balance
                                     );
                                 }
                             }
                         }
-                        Err(e) => eprintln!("Failed to parse update: {}", e),
+                        Err(e) => log::error!("Failed to parse update: {}", e),
                     },
-                    Some(Ok(Message::Binary(bin))) => println!("Received binary message: {:?}", bin),
-                    Some(Ok(Message::Ping(_))) => println!("Received ping"),
-                    Some(Ok(Message::Pong(_))) => println!("Received pong"),
+                    Some(Ok(Message::Binary(bin))) => log::info!("Received binary message: {:?}", bin),
+                    Some(Ok(Message::Ping(_))) => log::info!("Received ping"),
+                    Some(Ok(Message::Pong(_))) => log::info!("Received pong"),
                     Some(Ok(Message::Close(_))) => {
-                        println!("WebSocket closed");
+                        log::info!("WebSocket closed");
                         break;
                     }
-                    Some(Ok(Message::Frame(_))) => println!("Received raw frame"),
+                    Some(Ok(Message::Frame(_))) => log::info!("Received raw frame"),
                     Some(Err(e)) => {
-                        println!("Error receiving message: {}", e);
+                        log::error!("Error receiving message: {}", e);
                         break;
                     }
                     None => break,
                 }
             }
             _ = &mut shutdown_signal => {
-                println!("Received CTRL+C, shutting down gracefully...");
+                log::info!("Received CTRL+C, shutting down gracefully...");
                 break;
             }
         }
@@ -178,7 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Save trades to disk as JSON
     let trades_file = File::create("trades.json")?;
     serde_json::to_writer_pretty(trades_file, &trades)?;
-    println!("Saved trades to trades.json");
+    log::info!("Saved trades to trades.json");
 
     // Calculate and print final portfolio value
     let final_btc_price = order_book
@@ -188,9 +191,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(p, _)| *p)
         .unwrap_or(0.0);
     let total_value = usdt_balance + btc_balance * final_btc_price;
-    println!(
+    log::info!(
         "Final portfolio value: ${:.2} (USDT: ${:.2}, BTC: {:.8} @ {:.2} USDT)",
-        total_value, usdt_balance, btc_balance, final_btc_price
+        total_value,
+        usdt_balance,
+        btc_balance,
+        final_btc_price
     );
 
     Ok(())
