@@ -1,39 +1,15 @@
+mod models;
+
 use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::record_batch::RecordBatch;
 use futures_util::StreamExt;
+use models::{OrderBookSnapshot, OrderBookUpdate};
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 use reqwest;
-use serde::Deserialize;
 use std::fs::File;
 use std::sync::Arc;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-
-#[derive(Debug, Deserialize)]
-struct OrderBookSnapshot {
-    #[serde(rename = "lastUpdateId")]
-    last_update_id: u64,
-    bids: Vec<[String; 2]>,
-    asks: Vec<[String; 2]>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OrderBookUpdate {
-    #[serde(rename = "e")]
-    event_type: String,
-    #[serde(rename = "E")]
-    event_time: u64,
-    #[serde(rename = "s")]
-    symbol: String,
-    #[serde(rename = "U")]
-    first_update_id: u64,
-    #[serde(rename = "u")]
-    final_update_id: u64,
-    #[serde(rename = "b")]
-    bids: Vec<[String; 2]>,
-    #[serde(rename = "a")]
-    asks: Vec<[String; 2]>,
-}
 
 async fn fetch_order_book_snapshot(
     symbol: &str,
