@@ -37,7 +37,7 @@ async fn save_snapshot_to_json(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init(); // Initialize the logger
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     // Portfolio state
     let mut usdt_balance: f64 = 1000000.0;
